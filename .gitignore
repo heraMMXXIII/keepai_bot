@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+
+# Локальное состояние бота (даты пополнений и т.п.)
+storage.json
+
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+.DS_Store
+.idea/
+.vscode/
