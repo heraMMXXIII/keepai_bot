@@ -33,22 +33,71 @@ def format_balance_value(result: BalanceResult) -> str:
     return _format_number(result.value)
 
 
-def _topup_suffix(service_key: str, last_topup: Dict[str, Optional[str]]) -> str:
-    date_value = last_topup.get(service_key)
-    if not date_value:
+def _balance_line_date(
+    service_key: str, last_topup: Dict[str, Optional[str]], today: str
+) -> str:
+    """Дата в скобках у баланса: последнее пополнение или сегодня, если не задано."""
+    raw = last_topup.get(service_key)
+    if raw and str(raw).strip():
+        return str(raw).strip()
+    return today
+
+
+def _balance_detail_block(result: BalanceResult) -> str:
+    if not result.detail:
         return ""
-    return f" | пополнение: {date_value}"
+    lines = result.detail.split("\n")
+    indented = "\n".join(f"   {line}" for line in lines)
+    return f"\n   ответ API:\n{indented}"
+
+
+def _balance_needs_alert(
+    result: BalanceResult, alert_usd: float, alert_tokens: int
+) -> bool:
+    if not result.ok or result.value is None:
+        return False
+    if result.unit == "usd" and result.value < alert_usd:
+        return True
+    if result.unit == "tokens" and result.value < alert_tokens:
+        return True
+    if result.unit == "credits":
+        credits_threshold = alert_usd / 0.01
+        if result.value < credits_threshold:
+            return True
+    return False
+
+
+def _balance_line(
+    result: BalanceResult,
+    service_key: str,
+    last_topup: Dict[str, Optional[str]],
+    today: str,
+    alert_usd: float,
+    alert_tokens: int,
+) -> str:
+    line_date = _balance_line_date(service_key, last_topup, today)
+    core = (
+        f"{result.service} - {format_balance_value(result)} ({line_date})"
+        f"{_balance_detail_block(result)}"
+    )
+    if _balance_needs_alert(result, alert_usd, alert_tokens):
+        return f"⚠️ ВНИМАНИЕ {core}"
+    return core
 
 
 def format_balance_report(
-    results: Dict[str, BalanceResult], last_topup: Dict[str, Optional[str]]
+    results: Dict[str, BalanceResult],
+    last_topup: Dict[str, Optional[str]],
+    alert_usd: float,
+    alert_tokens: int,
 ) -> str:
     today = current_date_ru()
     lines = [f"🔋 Баланс нейросетей ({today})", ""]
     for service_key, result in results.items():
         lines.append(
-            f"{result.service} - {format_balance_value(result)} ({today})"
-            f"{_topup_suffix(service_key, last_topup)}"
+            _balance_line(
+                result, service_key, last_topup, today, alert_usd, alert_tokens
+            )
         )
     return "\n".join(lines)
 
@@ -57,13 +106,16 @@ def format_daily_report(
     balances: Dict[str, BalanceResult],
     health_results: Iterable[HealthResult],
     last_topup: Dict[str, Optional[str]],
+    alert_usd: float,
+    alert_tokens: int,
 ) -> str:
     today = current_date_ru()
     lines = [f"📊 Статус нейросетей ({today})", "", "💰 Балансы:"]
     for service_key, result in balances.items():
         lines.append(
-            f"{result.service} - {format_balance_value(result)} ({today})"
-            f"{_topup_suffix(service_key, last_topup)}"
+            _balance_line(
+                result, service_key, last_topup, today, alert_usd, alert_tokens
+            )
         )
 
     lines.append("")
@@ -72,39 +124,12 @@ def format_daily_report(
         if result.ok:
             lines.append(f"{result.service} - работает ✅ ({today})")
         else:
-            lines.append(f'{result.service} - не работает 🔴 ({today})')
+            detail = ""
+            if result.error:
+                err = result.error.strip().replace("\n", " ")
+                if len(err) > 500:
+                    err = err[:497] + "…"
+                detail = f"\n   └ {err}"
+            lines.append(f"{result.service} - не работает 🔴 ({today}){detail}")
     return "\n".join(lines)
-
-
-def build_alerts(
-    balances: Dict[str, BalanceResult], alert_usd: float, alert_tokens: int
-) -> list[str]:
-    alerts: list[str] = []
-    for result in balances.values():
-        if not result.ok or result.value is None:
-            continue
-
-        if result.unit == "usd" and result.value < alert_usd:
-            alerts.append(
-                f"{result.service} - ${result.value:.2f} (ниже порога ${alert_usd:.2f})"
-            )
-        elif result.unit == "tokens" and result.value < alert_tokens:
-            alerts.append(
-                f"{result.service} - {int(result.value)} токенов (ниже порога {alert_tokens})"
-            )
-        elif result.unit == "credits":
-            # Runway credits: 1 кредит = $0.01.
-            credits_threshold = alert_usd / 0.01
-            if result.value < credits_threshold:
-                alerts.append(
-                    f"{result.service} - {int(result.value)} кредитов "
-                    f"(ниже эквивалента ${alert_usd:.2f})"
-                )
-    return alerts
-
-
-def format_alert_message(alert_lines: list[str]) -> Optional[str]:
-    if not alert_lines:
-        return None
-    return "⚠️ ВНИМАНИЕ!\n" + "\n".join(alert_lines)
 

@@ -1,9 +1,15 @@
 import logging
+import os
+import warnings
 from datetime import datetime
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest
+from dotenv import load_dotenv
+
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands, Update
+from telegram.request import HTTPXRequest
+from telegram.warnings import PTBUserWarning
+from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -17,8 +23,30 @@ from telegram.ext import (
 )
 
 from config import Settings, load_settings
+from log_sanitize import attach_http_host_suppression, attach_http_log_redaction
 from scheduler import send_daily_snapshot, start_scheduler
 from storage import BALANCE_SERVICES, TopupStorage
+
+# Чтобы LOG_HTTP_* из keepai_bot/.env применялся до настройки httpx
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+
+def _configure_http_client_logging() -> None:
+    """Логи httpx: по умолчанию видны запросы к API; key/Bearer маскируются; Gemini/Runway не логируем."""
+    raw = os.getenv("LOG_HTTP_REQUESTS", "true").strip().lower()
+    verbose = raw in ("1", "true", "yes", "on")
+    level = logging.INFO if verbose else logging.WARNING
+    logging.getLogger("httpx").setLevel(level)
+    logging.getLogger("httpcore").setLevel(level)
+    attach_http_host_suppression()
+    if os.getenv("LOG_HTTP_REDACT_SECRETS", "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+        "",
+    ):
+        attach_http_log_redaction()
 
 
 logging.basicConfig(
@@ -37,6 +65,30 @@ for noisy in (
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+_configure_http_client_logging()
+
+# Смешанные CallbackQuery + MessageHandler в ConversationHandler — PTB шумит про per_*; это ожидаемо.
+warnings.filterwarnings("ignore", category=PTBUserWarning)
+
+# По умолчанию PTB даёт connect=5s — при прокси/медленном канале часто ConnectTimeout.
+_TELEGRAM_HTTP = HTTPXRequest(
+    connect_timeout=25.0,
+    read_timeout=30.0,
+    write_timeout=30.0,
+    pool_timeout=10.0,
+)
+
+
+async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, (TimedOut, NetworkError)):
+        logger.warning("Telegram API: сеть/таймаут (%s). Повторите действие.", err)
+        return
+    logger.error(
+        "Необработанная ошибка при обработке update",
+        exc_info=(type(err), err, err.__traceback__),
+    )
 
 
 async def gatekeeper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -66,7 +118,6 @@ CB_SET_DATE_PREFIX = "set_date:"
 
 def _service_label(service: str) -> str:
     names = {
-        "openai": "OpenAI",
         "elevenlabs": "ElevenLabs",
         "suno": "Suno",
         "runway": "Runway",
@@ -172,33 +223,74 @@ async def cancel_set_date(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
+async def popolnenie_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Меню выбора нейронки для даты пополнения (то же, что «Даты пополнения»)."""
+    context.user_data.pop("editing_service", None)
+    storage: TopupStorage = context.application.bot_data["storage"]
+    await update.effective_message.reply_text(
+        "Выбери нейронку для изменения даты последнего пополнения.",
+        reply_markup=_dates_menu(storage),
+    )
+
+
+async def popolnenie_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Во время ввода даты /popolnenie сбрасывает шаг и снова показывает выбор нейронки."""
+    await popolnenie_command(update, context)
+    return ConversationHandler.END
+
+
+def _is_not_modified_error(err: BadRequest) -> bool:
+    msg = (getattr(err, "message", None) or str(err)).lower()
+    return "not modified" in msg
+
+
 async def run_check_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer("Формирую отчёт...")
+    # Ответ на callback — сразу (до долгих HTTP), иначе истечёт таймаут query.
+    await query.answer()
 
     settings: Settings = context.application.bot_data["settings"]
     storage: TopupStorage = context.application.bot_data["storage"]
     uid = query.from_user.id if query.from_user else None
+
+    try:
+        await query.edit_message_text(
+            "⏳ Проверяю балансы и доступность API…\n"
+            "(запросы идут параллельно, обычно 10–40 с)",
+            reply_markup=_main_menu(),
+        )
+    except BadRequest as err:
+        if not _is_not_modified_error(err):
+            raise
+
     await send_daily_snapshot(
         context.application.bot,
         settings,
         storage,
         recipient_user_ids=(uid,) if uid is not None else None,
     )
+
+    done_text = (
+        "Отчёт отправлен. Можешь запустить снова или изменить даты пополнения."
+    )
     try:
-        await query.edit_message_text(
-            "Отчёт отправлен. Можешь запустить снова или изменить даты пополнения.",
-            reply_markup=_main_menu(),
-        )
-    except BadRequest as error:
-        # Telegram: тот же текст и клавиатура — «Message is not modified»
-        if "not modified" in (getattr(error, "message", "") or str(error)).lower():
-            await query.answer("Отчёт отправлен.")
-        else:
-            raise
+        await query.edit_message_text(done_text, reply_markup=_main_menu())
+    except BadRequest as err:
+        if _is_not_modified_error(err):
+            return
+        raise
 
 
 async def post_init(application: Application) -> None:
+    # Кнопка «Menu» слева от поля ввода: список команд бота (Telegram Bot API).
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Главное меню"),
+            BotCommand("popolnenie", "Дата пополнения по нейронке"),
+        ]
+    )
+    await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
     settings: Settings = application.bot_data["settings"]
     storage: TopupStorage = application.bot_data["storage"]
     scheduler = start_scheduler(application, settings, storage)
@@ -221,6 +313,7 @@ def build_application() -> Application:
     app = (
         Application.builder()
         .token(settings.telegram_bot_token)
+        .request(_TELEGRAM_HTTP)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
@@ -229,6 +322,7 @@ def build_application() -> Application:
     app.bot_data["settings"] = settings
     app.bot_data["storage"] = storage
 
+    app.add_error_handler(_global_error_handler)
     app.add_handler(TypeHandler(Update, gatekeeper), group=-1)
 
     app.add_handler(CommandHandler("start", start_command))
@@ -246,16 +340,22 @@ def build_application() -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_date)
             ]
         },
-        fallbacks=[CommandHandler("cancel", cancel_set_date)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_set_date),
+            CommandHandler("popolnenie", popolnenie_fallback),
+        ],
         allow_reentry=True,
     )
     app.add_handler(conversation)
+    # После ConversationHandler: /popolnenie вне диалога; внутри диалога — fallback выше.
+    app.add_handler(CommandHandler("popolnenie", popolnenie_command))
 
     return app
 
 
 def main() -> None:
     app = build_application()
+    logger.info("Запуск long polling (бот онлайн, Ctrl+C — остановка).")
     app.run_polling(close_loop=False)
 
 

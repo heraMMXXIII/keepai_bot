@@ -1,63 +1,71 @@
-from typing import Any, Dict
+import json
+import re
 
 import httpx
 
-from .base import BalanceResult
+from .base import HealthResult
 
-CREDIT_GRANTS_URL = "https://api.openai.com/dashboard/billing/credit_grants"
 MODELS_URL = "https://api.openai.com/v1/models"
 
-
-def _extract_openai_balance(payload: Dict[str, Any]) -> float:
-    if "total_available" in payload and isinstance(
-        payload["total_available"], (int, float)
-    ):
-        return float(payload["total_available"])
-
-    grants = payload.get("grants", {})
-    if isinstance(grants, dict):
-        total_available = grants.get("total_available")
-        if isinstance(total_available, (int, float)):
-            return float(total_available)
-
-    raise ValueError("Unable to parse OpenAI balance.")
+# Фрагменты ключа не показываем в Telegram (в теле 401 OpenAI подставляет свой текст).
+_SK_TOKEN = re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{8,}", re.I)
 
 
-async def get_openai_balance(api_key: str) -> BalanceResult:
-    """
-    Сумма с credit_grants доступна не всем ключам (часто 401 при рабочем чате).
-    Тогда проверяем ключ так же, как прод: GET /v1/models.
-    """
+def _redact_sk_in_text(text: str) -> str:
+    return _SK_TOKEN.sub("sk-***", text)
+
+
+def _error_for_telegram(body: str) -> str:
+    low = body.lower()
+    if "incorrect api key" in low or "invalid_api_key" in low:
+        return (
+            "Неверный или отозванный API ключ (ответ OpenAI). "
+            "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
+        )
+    try:
+        data = json.loads(body)
+        err = data.get("error") or {}
+        if err.get("code") == "invalid_api_key":
+            return (
+                "Неверный или отозванный API ключ (ответ OpenAI). "
+                "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
+            )
+        msg = (err.get("message") or "").strip()
+        if msg:
+            inner = msg.lower()
+            if "incorrect api key" in inner:
+                return (
+                    "Неверный или отозванный API ключ (ответ OpenAI). "
+                    "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
+                )
+            return _redact_sk_in_text(msg)[:400]
+    except json.JSONDecodeError:
+        pass
+    return _redact_sk_in_text(body[:400])
+
+
+async def check_openai_health(api_key: str) -> HealthResult:
+    """Проверка ключа: GET /v1/models (как в проде). Баланс $ по API не запрашиваем."""
     if not api_key:
-        return BalanceResult(service="OpenAI", ok=False, error="API key is missing")
+        return HealthResult(service="ChatGPT", ok=False, error="API key is missing")
 
     headers = {"Authorization": f"Bearer {api_key.strip()}"}
 
     try:
         async with httpx.AsyncClient(timeout=25) as client:
-            billing_resp = await client.get(CREDIT_GRANTS_URL, headers=headers)
-
-            if billing_resp.is_success:
-                balance_usd = _extract_openai_balance(billing_resp.json())
-                return BalanceResult(
-                    service="OpenAI", ok=True, value=balance_usd, unit="usd"
-                )
-
-            # 401/403 на billing — нормально для многих project keys; смотрим /v1/models
-            models_resp = await client.get(
-                MODELS_URL, headers=headers, params={"limit": 1}
-            )
-            if models_resp.is_success:
-                return BalanceResult(
-                    service="OpenAI",
-                    ok=True,
-                    value=1.0,
-                    unit="api_key_ok",
-                )
-
-            err = f"billing {billing_resp.status_code}, models {models_resp.status_code}"
-            if models_resp.text:
-                err += f": {models_resp.text[:200]}"
-            return BalanceResult(service="OpenAI", ok=False, error=err)
+            response = await client.get(MODELS_URL, headers=headers, params={"limit": 1})
+        response.raise_for_status()
+        return HealthResult(service="ChatGPT", ok=True)
+    except httpx.HTTPStatusError as error:
+        body = ""
+        try:
+            body = error.response.text or ""
+        except Exception:
+            pass
+        detail = _error_for_telegram(body[:2000])
+        msg = f"HTTP {error.response.status_code}: {detail}"
+        return HealthResult(service="ChatGPT", ok=False, error=msg)
     except Exception as error:
-        return BalanceResult(service="OpenAI", ok=False, error=str(error))
+        return HealthResult(
+            service="ChatGPT", ok=False, error=_redact_sk_in_text(str(error))
+        )

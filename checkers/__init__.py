@@ -1,5 +1,5 @@
 from .base import BalanceResult, HealthResult
-from .openai_checker import get_openai_balance
+from .openai_checker import check_openai_health
 from .elevenlabs_checker import get_elevenlabs_balance
 from .suno_checker import get_suno_balance
 from .runway_checker import get_runway_balance

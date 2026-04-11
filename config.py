@@ -12,6 +12,9 @@ class Settings:
     telegram_allowed_user_ids: tuple[int, ...]
     timezone: str
     report_hour: int
+    report_minute: int
+    # Интервал между отчётами только по балансам (по умолчанию 300 мин = 5 ч).
+    balance_interval_minutes: int
     balance_alert_usd: float
     balance_alert_tokens: int
     gpt_api_key: str
@@ -59,11 +62,13 @@ def load_settings() -> Settings:
         bot_env.get("BACKEND_ENV_FILE"),
         os.getenv("BACKEND_ENV_FILE"),
     )
-    backend_env_path = (
-        Path(backend_env_path_raw).expanduser()
-        if backend_env_path_raw
-        else backend_default_env_path
-    )
+    if backend_env_path_raw:
+        backend_env_path = Path(backend_env_path_raw).expanduser()
+        # Относительный путь — от каталога бота, а не от cwd (иначе ключи из бэка не подхватываются).
+        if not backend_env_path.is_absolute():
+            backend_env_path = (bot_dir / backend_env_path).resolve()
+    else:
+        backend_env_path = backend_default_env_path
     backend_env = dotenv_values(backend_env_path) if backend_env_path.exists() else {}
 
     def pick(
@@ -74,7 +79,9 @@ def load_settings() -> Settings:
         prefer_backend: bool = True,
     ) -> str:
         """
-        prefer_backend=True: OS → backend .env → keepai_bot/.env (ключи/модели как на сайте).
+        prefer_backend=True: keepai_backend/.env → keepai_bot/.env → OS
+        (ключи из репозитория важнее, чем старый OPENAI_API_KEY в переменных среды).
+
         prefer_backend=False: OS → bot .env → backend (токен бота, TELEGRAM_* и т.д.).
         """
         keys = (name,) + aliases
@@ -84,9 +91,9 @@ def load_settings() -> Settings:
 
         if prefer_backend:
             parts = (
-                layer_values(os.getenv)
-                + layer_values(lambda k: backend_env.get(k))
+                layer_values(lambda k: backend_env.get(k))
                 + layer_values(lambda k: bot_env.get(k))
+                + layer_values(os.getenv)
             )
         else:
             parts = (
@@ -121,9 +128,13 @@ def load_settings() -> Settings:
         telegram_allowed_user_ids=telegram_allowed_user_ids,
         timezone=pick("TIMEZONE", default="Europe/Moscow", prefer_backend=False),
         report_hour=int(pick("REPORT_HOUR", default="8", prefer_backend=False)),
+        report_minute=int(pick("REPORT_MINUTE", default="0", prefer_backend=False)),
+        balance_interval_minutes=int(
+            pick("BALANCE_INTERVAL_MINUTES", default="300", prefer_backend=False)
+        ),
         balance_alert_usd=float(pick("BALANCE_ALERT_USD", default="5.0", prefer_backend=False)),
         balance_alert_tokens=int(pick("BALANCE_ALERT_TOKENS", default="1000", prefer_backend=False)),
-        gpt_api_key=pick("GPT_API_KEY", "ChatGPT_API_KEY"),
+        gpt_api_key=pick("ChatGPT_API_KEY", "GPT_API_KEY", "OPENAI_API_KEY"),
         eleven_labs_api_key=pick("ELEVEN_LABS_API_KEY"),
         suno_api_key=pick("SUNO_API_KEY"),
         claude_api_key=pick("CLAUDE_API_KEY"),

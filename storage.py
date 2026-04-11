@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
-BALANCE_SERVICES = ("openai", "elevenlabs", "suno", "runway")
+BALANCE_SERVICES = ("elevenlabs", "suno", "runway")
 
 
 class TopupStorage:

@@ -9,6 +9,8 @@ class BalanceResult:
     value: Optional[float] = None
     unit: str = ""
     error: Optional[str] = None
+    # Сырой ответ API (например JSON Runway) для сверки с UI провайдера
+    detail: Optional[str] = None
 
 
 @dataclass
