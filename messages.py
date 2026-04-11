@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, Iterable, Optional
 
 from checkers.base import BalanceResult, HealthResult
+from storage import HEALTH_TOPUP_KEYS
 
 
 def current_date_ru() -> str:
@@ -33,10 +34,10 @@ def format_balance_value(result: BalanceResult) -> str:
     return _format_number(result.value)
 
 
-def _balance_line_date(
+def _balance_date_in_parens(
     service_key: str, last_topup: Dict[str, Optional[str]], today: str
 ) -> str:
-    """Дата в скобках у баланса: последнее пополнение или сегодня, если не задано."""
+    """Дата в скобках у строки баланса: последнее пополнение или сегодня."""
     raw = last_topup.get(service_key)
     if raw and str(raw).strip():
         return str(raw).strip()
@@ -75,7 +76,7 @@ def _balance_line(
     alert_usd: float,
     alert_tokens: int,
 ) -> str:
-    line_date = _balance_line_date(service_key, last_topup, today)
+    line_date = _balance_date_in_parens(service_key, last_topup, today)
     core = (
         f"{result.service} - {format_balance_value(result)} ({line_date})"
         f"{_balance_detail_block(result)}"
@@ -120,9 +121,10 @@ def format_daily_report(
 
     lines.append("")
     lines.append("✅ Работоспособность:")
-    for result in health_results:
+    for service_key, result in zip(HEALTH_TOPUP_KEYS, health_results):
+        line_date = _balance_date_in_parens(service_key, last_topup, today)
         if result.ok:
-            lines.append(f"{result.service} - работает ✅ ({today})")
+            lines.append(f"{result.service} - работает ✅ ({line_date})")
         else:
             detail = ""
             if result.error:
@@ -130,6 +132,6 @@ def format_daily_report(
                 if len(err) > 500:
                     err = err[:497] + "…"
                 detail = f"\n   └ {err}"
-            lines.append(f"{result.service} - не работает 🔴 ({today}){detail}")
+            lines.append(f"{result.service} - не работает 🔴 ({line_date}){detail}")
     return "\n".join(lines)
 

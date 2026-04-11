@@ -25,7 +25,7 @@ from telegram.ext import (
 from config import Settings, load_settings
 from log_sanitize import attach_http_host_suppression, attach_http_log_redaction
 from scheduler import send_daily_snapshot, start_scheduler
-from storage import BALANCE_SERVICES, TopupStorage
+from storage import TOPUP_SERVICES, TopupStorage
 
 # Чтобы LOG_HTTP_* из keepai_bot/.env применялся до настройки httpx
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -121,15 +121,21 @@ def _service_label(service: str) -> str:
         "elevenlabs": "ElevenLabs",
         "suno": "Suno",
         "runway": "Runway",
+        "chatgpt": "ChatGPT",
+        "claude": "Claude",
+        "gemini": "Gemini",
+        "perplexity": "Perplexity",
+        "grok": "Grok",
+        "ideogram": "Ideogram",
     }
-    return names[service]
+    return names.get(service, service)
 
 
 def _main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📊 Проверить сейчас", callback_data=CB_CHECK_NOW)],
-            [InlineKeyboardButton("📅 Даты пополнения", callback_data=CB_DATES)],
+            [InlineKeyboardButton("📊 Проверить состояние нейросетей", callback_data=CB_CHECK_NOW)],
+            [InlineKeyboardButton("📅 Изменить дату пополнения", callback_data=CB_DATES)],
         ]
     )
 
@@ -137,7 +143,7 @@ def _main_menu() -> InlineKeyboardMarkup:
 def _dates_menu(storage: TopupStorage) -> InlineKeyboardMarkup:
     dates = storage.get_all_dates()
     buttons = []
-    for service in BALANCE_SERVICES:
+    for service in TOPUP_SERVICES:
         value = dates.get(service) or "не задана"
         title = f"{_service_label(service)}: {value}"
         buttons.append(
@@ -224,7 +230,7 @@ async def cancel_set_date(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def popolnenie_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Меню выбора нейронки для даты пополнения (то же, что «Даты пополнения»)."""
+    """Меню выбора нейронки для даты пополнения (то же, что кнопка в главном меню)."""
     context.user_data.pop("editing_service", None)
     storage: TopupStorage = context.application.bot_data["storage"]
     await update.effective_message.reply_text(
@@ -255,23 +261,40 @@ async def run_check_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     try:
         await query.edit_message_text(
-            "⏳ Проверяю балансы и доступность API…\n"
-            "(запросы идут параллельно, обычно 10–40 с)",
+            "⏳ Обновление…",
             reply_markup=_main_menu(),
         )
     except BadRequest as err:
         if not _is_not_modified_error(err):
             raise
 
-    await send_daily_snapshot(
-        context.application.bot,
-        settings,
-        storage,
-        recipient_user_ids=(uid,) if uid is not None else None,
-    )
+    loader_msg = None
+    if query.message:
+        try:
+            loader_msg = await query.message.reply_text(
+                "⏳ Собираю отчёт: балансы и проверка API.\n"
+                "Запросы идут параллельно, обычно 10–40 с…",
+                disable_notification=True,
+            )
+        except BadRequest:
+            pass
+
+    try:
+        await send_daily_snapshot(
+            context.application.bot,
+            settings,
+            storage,
+            recipient_user_ids=(uid,) if uid is not None else None,
+        )
+    finally:
+        if loader_msg is not None:
+            try:
+                await loader_msg.delete()
+            except BadRequest:
+                pass
 
     done_text = (
-        "Отчёт отправлен. Можешь запустить снова или изменить даты пополнения."
+        "Отчёт отправлен. Можешь запустить снова или изменить дату пополнения."
     )
     try:
         await query.edit_message_text(done_text, reply_markup=_main_menu())

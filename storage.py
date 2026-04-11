@@ -2,8 +2,17 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-
-BALANCE_SERVICES = ("elevenlabs", "suno", "runway")
+# Ключи для дат пополнения: балансы + работоспособность (порядок health = scheduler.collect_health).
+BALANCE_ONLY_KEYS = ("elevenlabs", "suno", "runway")
+HEALTH_TOPUP_KEYS = (
+    "chatgpt",
+    "claude",
+    "gemini",
+    "perplexity",
+    "grok",
+    "ideogram",
+)
+TOPUP_SERVICES = BALANCE_ONLY_KEYS + HEALTH_TOPUP_KEYS
 
 
 class TopupStorage:
@@ -11,7 +20,7 @@ class TopupStorage:
         self.path = path
 
     def _default_data(self) -> Dict[str, Dict[str, Optional[str]]]:
-        return {"last_topup": {service: None for service in BALANCE_SERVICES}}
+        return {"last_topup": {service: None for service in TOPUP_SERVICES}}
 
     def _read(self) -> Dict:
         if not self.path.exists():
@@ -30,14 +39,13 @@ class TopupStorage:
     def get_all_dates(self) -> Dict[str, Optional[str]]:
         data = self._read()
         last_topup = data.setdefault("last_topup", {})
-        for service in BALANCE_SERVICES:
+        for service in TOPUP_SERVICES:
             last_topup.setdefault(service, None)
         return last_topup
 
     def set_date(self, service: str, date_value: str) -> None:
-        if service not in BALANCE_SERVICES:
+        if service not in TOPUP_SERVICES:
             raise ValueError(f"Unsupported service '{service}'")
         data = self._read()
         data.setdefault("last_topup", {})[service] = date_value
         self._write(data)
-
