@@ -1,5 +1,4 @@
 import logging
-import os
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +8,7 @@ from dotenv import load_dotenv
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands, Update
 from telegram.request import HTTPXRequest
 from telegram.warnings import PTBUserWarning
-from telegram.error import BadRequest, NetworkError, TimedOut
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -23,38 +22,20 @@ from telegram.ext import (
 )
 
 from config import Settings, load_settings
-from log_sanitize import attach_http_host_suppression, attach_http_log_redaction
 from scheduler import send_daily_snapshot, start_scheduler
 from storage import TOPUP_SERVICES, TopupStorage
 
-# Чтобы LOG_HTTP_* из keepai_bot/.env применялся до настройки httpx
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-
-def _configure_http_client_logging() -> None:
-    """Логи httpx: по умолчанию видны запросы к API; key/Bearer маскируются; Gemini/Runway не логируем."""
-    raw = os.getenv("LOG_HTTP_REQUESTS", "true").strip().lower()
-    verbose = raw in ("1", "true", "yes", "on")
-    level = logging.INFO if verbose else logging.WARNING
-    logging.getLogger("httpx").setLevel(level)
-    logging.getLogger("httpcore").setLevel(level)
-    attach_http_host_suppression()
-    if os.getenv("LOG_HTTP_REDACT_SECRETS", "true").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-        "",
-    ):
-        attach_http_log_redaction()
-
-
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.WARNING,
 )
-# Тише только Telegram и планировщик; httpx/httpcore оставляем — видно запросы к API нейросетей.
-for noisy in (
+log = logging.getLogger("keepai_bot")
+log.setLevel(logging.INFO)
+for _silent in (
+    "httpx",
+    "httpcore",
     "telegram",
     "telegram.ext",
     "telegram.ext._application",
@@ -62,11 +43,7 @@ for noisy in (
     "apscheduler.executors",
     "apscheduler.scheduler",
 ):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
-
-logger = logging.getLogger(__name__)
-
-_configure_http_client_logging()
+    logging.getLogger(_silent).setLevel(logging.CRITICAL)
 
 # Смешанные CallbackQuery + MessageHandler в ConversationHandler — PTB шумит про per_*; это ожидаемо.
 warnings.filterwarnings("ignore", category=PTBUserWarning)
@@ -80,15 +57,18 @@ _TELEGRAM_HTTP = HTTPXRequest(
 )
 
 
-async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    err = context.error
-    if isinstance(err, (TimedOut, NetworkError)):
-        logger.warning("Telegram API: сеть/таймаут (%s). Повторите действие.", err)
+async def _global_error_handler(_update: object, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ошибки не пишем в лог — только действия пользователя и автоотчёты планировщика."""
+    return
+
+
+def _log_user_action(update: Update, action: str) -> None:
+    user = update.effective_user
+    if user is None:
+        log.info("Действие: %s", action)
         return
-    logger.error(
-        "Необработанная ошибка при обработке update",
-        exc_info=(type(err), err, err.__traceback__),
-    )
+    label = f"@{user.username}" if user.username else "—"
+    log.info("Пользователь %s (%s): %s", user.id, label, action)
 
 
 async def gatekeeper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,6 +79,8 @@ async def gatekeeper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         raise ApplicationHandlerStop
     if user.id in settings.telegram_allowed_user_ids:
         return
+    label = f"@{user.username}" if user.username else "—"
+    log.info("Пользователь %s (%s): попытка доступа запрещена", user.id, label)
     if update.message:
         await update.message.reply_text(
             "Доступ запрещён. Ваш Telegram user id не в списке разрешённых."
@@ -159,12 +141,14 @@ def _parse_date(raw_value: str) -> str:
 
 
 async def start_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    _log_user_action(update, "команда /start")
     await update.effective_message.reply_text(
         "Бот мониторинга KeepAI готов к работе.", reply_markup=_main_menu()
     )
 
 
 async def show_main_menu(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    _log_user_action(update, "главное меню (кнопка «Назад»)")
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
@@ -173,6 +157,7 @@ async def show_main_menu(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def show_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _log_user_action(update, "меню дат пополнения")
     query = update.callback_query
     await query.answer()
     storage: TopupStorage = context.application.bot_data["storage"]
@@ -187,6 +172,7 @@ async def ask_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
     data = query.data or ""
     service = data.replace(CB_SET_DATE_PREFIX, "", 1)
+    _log_user_action(update, f"выбрана нейросеть для даты пополнения: {_service_label(service)}")
     context.user_data["editing_service"] = service
     await query.edit_message_text(
         f"Введи дату последнего пополнения для {_service_label(service)} "
@@ -198,6 +184,7 @@ async def ask_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     service = context.user_data.get("editing_service")
     if not service:
+        _log_user_action(update, "ввод даты без выбранного сервиса")
         await update.message.reply_text("Сервис не выбран. Нажми /start.")
         return ConversationHandler.END
 
@@ -205,6 +192,10 @@ async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     try:
         normalized_date = _parse_date(raw_date)
     except ValueError:
+        _log_user_action(
+            update,
+            f"неверный формат даты для {_service_label(service)}: {raw_date!r}",
+        )
         await update.effective_message.reply_text(
             "Неверный формат. Используй ДД.ММ.ГГГГ, например 10.04.2026."
         )
@@ -213,6 +204,10 @@ async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     storage: TopupStorage = context.application.bot_data["storage"]
     storage.set_date(service, normalized_date)
     context.user_data.pop("editing_service", None)
+    _log_user_action(
+        update,
+        f"сохранена дата пополнения {_service_label(service)}: {normalized_date}",
+    )
 
     await update.effective_message.reply_text(
         f"Дата для {_service_label(service)} сохранена: {normalized_date}",
@@ -222,6 +217,7 @@ async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def cancel_set_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    _log_user_action(update, "команда /cancel (ввод даты пополнения)")
     context.user_data.pop("editing_service", None)
     await update.effective_message.reply_text(
         "Изменение даты отменено.", reply_markup=_main_menu()
@@ -231,6 +227,7 @@ async def cancel_set_date(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def popolnenie_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Меню выбора нейронки для даты пополнения (то же, что кнопка в главном меню)."""
+    _log_user_action(update, "команда /popolnenie")
     context.user_data.pop("editing_service", None)
     storage: TopupStorage = context.application.bot_data["storage"]
     await update.effective_message.reply_text(
@@ -254,6 +251,7 @@ async def run_check_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     # Ответ на callback — сразу (до долгих HTTP), иначе истечёт таймаут query.
     await query.answer()
+    _log_user_action(update, "ручная проверка состояния нейросетей")
 
     settings: Settings = context.application.bot_data["settings"]
     storage: TopupStorage = context.application.bot_data["storage"]
@@ -286,6 +284,7 @@ async def run_check_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             storage,
             recipient_user_ids=(uid,) if uid is not None else None,
         )
+        _log_user_action(update, "ручная проверка: отчёт отправлен")
     finally:
         if loader_msg is not None:
             try:
@@ -318,14 +317,12 @@ async def post_init(application: Application) -> None:
     storage: TopupStorage = application.bot_data["storage"]
     scheduler = start_scheduler(application, settings, storage)
     application.bot_data["scheduler"] = scheduler
-    logger.info("Scheduler started.")
 
 
 async def post_shutdown(application: Application) -> None:
     scheduler = application.bot_data.get("scheduler")
     if scheduler:
         scheduler.shutdown(wait=False)
-    logger.info("Scheduler stopped.")
 
 
 def build_application() -> Application:
@@ -378,7 +375,6 @@ def build_application() -> Application:
 
 def main() -> None:
     app = build_application()
-    logger.info("Запуск long polling (бот онлайн, Ctrl+C — остановка).")
     app.run_polling(close_loop=False)
 
 

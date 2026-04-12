@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -23,6 +24,8 @@ from checkers.base import BalanceResult, HealthResult
 from config import Settings
 from messages import format_balance_report, format_daily_report
 from storage import TopupStorage
+
+log = logging.getLogger("keepai_bot")
 
 
 async def collect_balances(settings: Settings) -> OrderedDict[str, BalanceResult]:
@@ -118,9 +121,18 @@ def start_scheduler(
 
     async def interval_job() -> None:
         await send_balance_snapshot(application.bot, settings, storage)
+        log.info(
+            "Автоотчёт: балансы (интервал %s мин)",
+            max(1, settings.balance_interval_minutes),
+        )
 
     async def daily_job() -> None:
         await send_daily_snapshot(application.bot, settings, storage)
+        log.info(
+            "Автоотчёт: полный отчёт о нейросетях (%02d:%02d)",
+            settings.report_hour,
+            settings.report_minute,
+        )
 
     interval_min = max(1, settings.balance_interval_minutes)
     scheduler.add_job(

@@ -1,11 +1,8 @@
 import json
-import logging
 
 import httpx
 
 from .base import HealthResult
-
-logger = logging.getLogger(__name__)
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
