@@ -22,7 +22,7 @@ from checkers import (
 )
 from checkers.base import BalanceResult, HealthResult
 from config import Settings
-from messages import format_balance_report, format_daily_report
+from messages import format_balance_report, format_daily_report, format_health_alert_report
 from storage import TopupStorage
 
 log = logging.getLogger("keepai_bot")
@@ -111,6 +111,9 @@ async def send_daily_snapshot(
     )
     targets = _recipients(settings, recipient_user_ids)
     await _broadcast(bot, targets, message)
+    health_alert_message = format_health_alert_report(health)
+    if health_alert_message:
+        await _broadcast(bot, targets, health_alert_message)
 
 
 def start_scheduler(

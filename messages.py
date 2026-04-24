@@ -135,3 +135,21 @@ def format_daily_report(
             lines.append(f"{result.service} - не работает 🔴 ({line_date}){detail}")
     return "\n".join(lines)
 
+
+def format_health_alert_report(health_results: Iterable[HealthResult]) -> str | None:
+    today = current_date_ru()
+    failed = [result for result in health_results if not result.ok]
+    if not failed:
+        return None
+
+    lines = [f"⚠️ ВНИМАНИЕ: проблемы в health-check ({today})", ""]
+    for result in failed:
+        detail = ""
+        if result.error:
+            err = result.error.strip().replace("\n", " ")
+            if len(err) > 500:
+                err = err[:497] + "…"
+            detail = f"\n   └ {err}"
+        lines.append(f"{result.service} - не работает 🔴{detail}")
+    return "\n".join(lines)
+
