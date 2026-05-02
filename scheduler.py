@@ -44,17 +44,17 @@ async def collect_balances(settings: Settings) -> OrderedDict[str, BalanceResult
 
 
 async def collect_health(settings: Settings) -> list[HealthResult]:
-    chatgpt, claude, gemini, perplexity, grok, ideogram = await asyncio.gather(
+    openai, claude, gemini, perplexity, grok, ideogram = await asyncio.gather(
         check_openai_health(settings.gpt_api_key),
-        check_claude_health(settings.claude_api_key),
+        check_claude_health(settings.claude_api_key, settings.claude_model),
         check_gemini_health(settings.gemini_api_key, settings.gemini_model),
         check_perplexity_health(
             settings.perplexity_api_key, settings.perplexity_model
         ),
-        check_grok_health(settings.grok_api_key),
+        check_grok_health(settings.grok_api_key, settings.grok_model),
         check_ideogram_health(settings.ideogram_api_key),
     )
-    return [chatgpt, claude, gemini, perplexity, grok, ideogram]
+    return [openai, claude, gemini, perplexity, grok, ideogram]
 
 
 async def _broadcast(bot: Bot, user_ids: Sequence[int], text: str) -> None:

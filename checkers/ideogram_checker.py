@@ -18,7 +18,14 @@ async def check_ideogram_health(api_key: str) -> HealthResult:
 
         if response.status_code in (401, 403):
             return HealthResult(service="Ideogram", ok=False, error="Unauthorized")
-        if response.is_success or response.status_code == 429:
+        if response.status_code == 429:
+            detail = (response.text or "")[:200]
+            return HealthResult(
+                service="Ideogram",
+                ok=False,
+                error=f"HTTP 429 (лимит / rate limit) {detail}",
+            )
+        if response.is_success:
             return HealthResult(service="Ideogram", ok=True)
         if response.status_code >= 500:
             return HealthResult(service="Ideogram", ok=False, error=f"HTTP {response.status_code}")

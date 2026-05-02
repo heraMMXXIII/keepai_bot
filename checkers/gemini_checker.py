@@ -19,58 +19,58 @@ def _gemini_error_snippet(text: str, limit: int = 400) -> str:
         return text[:limit]
 
 
+def _normalize_gemini_model_id(model: str) -> str:
+    m = (model or "gemini-2.5-flash-lite").strip()
+    if m.startswith("models/"):
+        m = m[len("models/") :]
+    return m
+
+
 async def check_gemini_health(
     api_key: str,
     model: str = "gemini-2.5-flash-lite",
 ) -> HealthResult:
-    """
-    Проверка ключа Gemini (Google AI / AI Studio).
-
-    Документация модели: https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite
-
-    Ключ передаём в query `?key=` (как в официальных примерах REST) — так надёжнее, чем
-    только заголовок в некоторых окружениях. Тело — минимальный generateContent без role
-    (как в Quickstart).
-    """
+    """Только generateContent: список моделей не отражает квоту на генерацию (как у старого OpenAI)."""
     if not api_key:
         return HealthResult(service="Gemini", ok=False, error="API key is missing")
 
     key = api_key.strip()
     key_param = {"key": key}
+    primary = _normalize_gemini_model_id(model)
+    fallbacks = ("gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-1.5-flash")
+    models_to_try = []
+    for m in (primary,) + fallbacks:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
-    # Минимальное тело по Quickstart (без поля role — часть клиентов так шлёт стабильнее).
     minimal_body = {
-        "contents": [{"parts": [{"text": "ok"}]}],
+        "contents": [{"parts": [{"text": "."}]}],
         "generationConfig": {"maxOutputTokens": 8, "temperature": 0},
     }
-
     headers_json = {"Content-Type": "application/json"}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # 1) Список моделей (без pageSize — редко даёт 400 из-за параметров).
-            list_resp = await client.get(f"{API_BASE}/models", params=key_param)
-            if list_resp.is_success:
-                return HealthResult(service="Gemini", ok=True)
-
-            # 2) Прямой generateContent с ключом в URL (рекомендуемый способ в доке).
-            gen_url = f"{API_BASE}/models/{model}:generateContent"
-            gen_resp = await client.post(
-                gen_url,
-                params=key_param,
-                headers=headers_json,
-                json=minimal_body,
-            )
-            if gen_resp.is_success:
-                return HealthResult(service="Gemini", ok=True)
-
-            err_parts = [
-                f"listModels HTTP {list_resp.status_code}",
-                _gemini_error_snippet(list_resp.text),
-                f"generateContent HTTP {gen_resp.status_code}",
-                _gemini_error_snippet(gen_resp.text),
-            ]
-            err = " | ".join(p for p in err_parts if p)
-            return HealthResult(service="Gemini", ok=False, error=err)
+        async with httpx.AsyncClient(timeout=45) as client:
+            for i, m in enumerate(models_to_try):
+                gen_url = f"{API_BASE}/models/{m}:generateContent"
+                gen_resp = await client.post(
+                    gen_url,
+                    params=key_param,
+                    headers=headers_json,
+                    json=minimal_body,
+                )
+                if gen_resp.status_code == 200:
+                    return HealthResult(service="Gemini", ok=True)
+                body = gen_resp.text or ""
+                if gen_resp.status_code in (400, 404) and i < len(models_to_try) - 1:
+                    low = body.lower()
+                    if "model" in low or "not found" in low or "not_found" in low:
+                        continue
+                detail = _gemini_error_snippet(body[:2000])
+                return HealthResult(
+                    service="Gemini",
+                    ok=False,
+                    error=f"HTTP {gen_resp.status_code}: {detail}",
+                )
     except Exception as error:
         return HealthResult(service="Gemini", ok=False, error=str(error))

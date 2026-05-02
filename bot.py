@@ -103,7 +103,7 @@ def _service_label(service: str) -> str:
         "elevenlabs": "ElevenLabs",
         "suno": "Suno",
         "runway": "Runway",
-        "chatgpt": "ChatGPT",
+        "chatgpt": "OpenAI",
         "claude": "Claude",
         "gemini": "Gemini",
         "perplexity": "Perplexity",

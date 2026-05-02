@@ -5,7 +5,7 @@ import httpx
 
 from .base import HealthResult
 
-MODELS_URL = "https://api.openai.com/v1/models"
+CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 
 # Фрагменты ключа не показываем в Telegram (в теле 401 OpenAI подставляет свой текст).
 _SK_TOKEN = re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{8,}", re.I)
@@ -22,6 +22,11 @@ def _error_for_telegram(body: str) -> str:
             "Неверный или отозванный API ключ (ответ OpenAI). "
             "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
         )
+    if "insufficient_quota" in low or "exceeded your current quota" in low:
+        return (
+            "Не хватает квоты или баланса OpenAI. "
+            "Пополните биллинг: https://platform.openai.com/account/billing"
+        )
     try:
         data = json.loads(body)
         err = data.get("error") or {}
@@ -31,12 +36,23 @@ def _error_for_telegram(body: str) -> str:
                 "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
             )
         msg = (err.get("message") or "").strip()
+        code = str(err.get("code") or "").lower()
+        if code == "insufficient_quota":
+            return (
+                "Не хватает квоты или баланса OpenAI. "
+                "Пополните биллинг: https://platform.openai.com/account/billing"
+            )
         if msg:
             inner = msg.lower()
             if "incorrect api key" in inner:
                 return (
                     "Неверный или отозванный API ключ (ответ OpenAI). "
                     "Обновите GPT_API_KEY в .env: https://platform.openai.com/account/api-keys"
+                )
+            if "exceeded your current quota" in inner or "insufficient_quota" in inner:
+                return (
+                    "Не хватает квоты или баланса OpenAI. "
+                    "Пополните биллинг: https://platform.openai.com/account/billing"
                 )
             return _redact_sk_in_text(msg)[:400]
     except json.JSONDecodeError:
@@ -45,27 +61,51 @@ def _error_for_telegram(body: str) -> str:
 
 
 async def check_openai_health(api_key: str) -> HealthResult:
-    """Проверка ключа: GET /v1/models (как в проде). Баланс $ по API не запрашиваем."""
-    if not api_key:
-        return HealthResult(service="ChatGPT", ok=False, error="API key is missing")
+    """Реальный мини-запрос к Chat Completions: ловит исчерпанный баланс/квоту.
 
-    headers = {"Authorization": f"Bearer {api_key.strip()}"}
+    Раньше был только GET /v1/models — при нулевом балансе он часто остаётся 200,
+    хотя DALL-E и чат уже не работают; отчёт вводил в заблуждение.
+    DALL-E отдельно не дергаем (лишняя стоимость и нет «сухого» эндпоинта).
+    """
+    if not api_key:
+        return HealthResult(service="OpenAI", ok=False, error="API key is missing")
+
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+    }
+    models_to_try = ("gpt-4o-mini", "gpt-3.5-turbo")
 
     try:
         async with httpx.AsyncClient(timeout=25) as client:
-            response = await client.get(MODELS_URL, headers=headers, params={"limit": 1})
-        response.raise_for_status()
-        return HealthResult(service="ChatGPT", ok=True)
-    except httpx.HTTPStatusError as error:
-        body = ""
-        try:
-            body = error.response.text or ""
-        except Exception:
-            pass
-        detail = _error_for_telegram(body[:2000])
-        msg = f"HTTP {error.response.status_code}: {detail}"
-        return HealthResult(service="ChatGPT", ok=False, error=msg)
+            for i, model in enumerate(models_to_try):
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "."}],
+                    "max_tokens": 1,
+                }
+                response = await client.post(
+                    CHAT_COMPLETIONS_URL, headers=headers, json=payload
+                )
+                if response.status_code == 200:
+                    return HealthResult(service="OpenAI", ok=True)
+                body = ""
+                try:
+                    body = response.text or ""
+                except Exception:
+                    pass
+                if response.status_code == 404 and i < len(models_to_try) - 1:
+                    try:
+                        data = response.json()
+                        err_msg = (data.get("error") or {}).get("message") or ""
+                        if "model" in err_msg.lower():
+                            continue
+                    except Exception:
+                        continue
+                detail = _error_for_telegram(body[:2000])
+                msg = f"HTTP {response.status_code}: {detail}"
+                return HealthResult(service="OpenAI", ok=False, error=msg)
     except Exception as error:
         return HealthResult(
-            service="ChatGPT", ok=False, error=_redact_sk_in_text(str(error))
+            service="OpenAI", ok=False, error=_redact_sk_in_text(str(error))
         )
