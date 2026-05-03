@@ -86,6 +86,7 @@ async def send_balance_snapshot(
         last_topup,
         settings.balance_alert_usd,
         settings.balance_alert_tokens,
+        settings.balance_alert_chars,
     )
     targets = _recipients(settings, recipient_user_ids)
     await _broadcast(bot, targets, message)
@@ -110,6 +111,7 @@ async def send_daily_snapshot(
         last_topup,
         settings.balance_alert_usd,
         settings.balance_alert_tokens,
+        settings.balance_alert_chars,
     )
     targets = _recipients(settings, recipient_user_ids)
     await _broadcast(bot, targets, message)
