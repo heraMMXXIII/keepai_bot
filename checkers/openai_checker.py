@@ -7,6 +7,18 @@ from .base import HealthResult
 
 CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 
+# Лимит ответа на «пинг» (промпт «.»): одно число и для max_tokens, и для max_completion_tokens (gpt-5).
+_OPENAI_HEALTH_OUTPUT_LIMIT = 100
+
+
+# Как keepai_backend/core/services/gpt.py — для GPT-5.* Chat Completions: max_completion_tokens.
+def _openai_output_limit_payload(model_id: str) -> dict:
+    mid = (model_id or "").strip().lower()
+    if mid.startswith("gpt-5"):
+        return {"max_completion_tokens": _OPENAI_HEALTH_OUTPUT_LIMIT}
+    return {"max_tokens": _OPENAI_HEALTH_OUTPUT_LIMIT}
+
+
 # Фрагменты ключа не показываем в Telegram (в теле 401 OpenAI подставляет свой текст).
 _SK_TOKEN = re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{8,}", re.I)
 
@@ -60,7 +72,7 @@ def _error_for_telegram(body: str) -> str:
     return _redact_sk_in_text(body[:400])
 
 
-async def check_openai_health(api_key: str) -> HealthResult:
+async def check_openai_health(api_key: str, model: str = "gpt-4o") -> HealthResult:
     """Реальный мини-запрос к Chat Completions: ловит исчерпанный баланс/квоту.
 
     Раньше был только GET /v1/models — при нулевом балансе он часто остаётся 200,
@@ -74,21 +86,43 @@ async def check_openai_health(api_key: str) -> HealthResult:
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
     }
-    models_to_try = ("gpt-4o-mini", "gpt-3.5-turbo")
+    primary = (model or "gpt-4o").strip()
+    fallbacks = ("gpt-4o-mini", "gpt-3.5-turbo")
+    models_to_try: list[str] = []
+    for m in (primary,) + fallbacks:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
     try:
         async with httpx.AsyncClient(timeout=25) as client:
-            for i, model in enumerate(models_to_try):
+            for i, mtry in enumerate(models_to_try):
                 payload = {
-                    "model": model,
+                    "model": mtry,
                     "messages": [{"role": "user", "content": "."}],
-                    "max_tokens": 1,
+                    **_openai_output_limit_payload(mtry),
                 }
                 response = await client.post(
                     CHAT_COMPLETIONS_URL, headers=headers, json=payload
                 )
+                # Если модель новее списка — API может вернуть подсказку про max_completion_tokens.
+                if response.status_code == 400:
+                    body_try = (response.text or "").lower()
+                    if (
+                        "max_completion_tokens" in body_try
+                        and "max_tokens" in payload
+                    ):
+                        payload = {
+                            "model": mtry,
+                            "messages": [{"role": "user", "content": "."}],
+                            "max_completion_tokens": _OPENAI_HEALTH_OUTPUT_LIMIT,
+                        }
+                        response = await client.post(
+                            CHAT_COMPLETIONS_URL, headers=headers, json=payload
+                        )
                 if response.status_code == 200:
-                    return HealthResult(service="OpenAI", ok=True)
+                    return HealthResult(
+                        service="OpenAI", ok=True, model_used=mtry
+                    )
                 body = ""
                 try:
                     body = response.text or ""
@@ -104,8 +138,16 @@ async def check_openai_health(api_key: str) -> HealthResult:
                         continue
                 detail = _error_for_telegram(body[:2000])
                 msg = f"HTTP {response.status_code}: {detail}"
-                return HealthResult(service="OpenAI", ok=False, error=msg)
+                return HealthResult(
+                    service="OpenAI",
+                    ok=False,
+                    error=msg,
+                    model_used=mtry,
+                )
     except Exception as error:
         return HealthResult(
-            service="OpenAI", ok=False, error=_redact_sk_in_text(str(error))
+            service="OpenAI",
+            ok=False,
+            error=_redact_sk_in_text(str(error)),
+            model_used=models_to_try[0] if models_to_try else None,
         )

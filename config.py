@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import dotenv_values
 
@@ -30,6 +31,10 @@ class Settings:
     gemini_model: str
     perplexity_model: str
     grok_model: str
+    gpt_model: str
+    health_models_from_db: bool
+    """PostgreSQL DSN (postgresql://...) для чтения core_aimodelcost; пустая строка — не ходить в БД."""
+    db_dsn: str
 
 
 def _required(name: str) -> str:
@@ -123,6 +128,26 @@ def load_settings() -> Settings:
             "или для одного человека TELEGRAM_CHAT_ID (это тот же user id в личке)."
         )
 
+    db_url = pick("DATABASE_URL", default="").strip()
+    if db_url:
+        db_dsn = db_url
+    else:
+        host = pick("DB_HOST", default="localhost").strip()
+        port = pick("DB_PORT", default="5432").strip()
+        name = pick("DB_NAME", default="keepai_db").strip()
+        user = pick("DB_USER", default="postgres").strip()
+        password = pick("DB_PASSWORD", default="").strip()
+        if password:
+            db_dsn = (
+                f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
+                f"@{host}:{port}/{quote_plus(name)}"
+            )
+        else:
+            db_dsn = f"postgresql://{quote_plus(user)}@{host}:{port}/{quote_plus(name)}"
+
+    hm_raw = pick("HEALTH_MODELS_FROM_DB", default="true").strip().lower()
+    health_models_from_db = hm_raw not in ("0", "false", "no", "off")
+
     return Settings(
         telegram_bot_token=pick("TELEGRAM_BOT_TOKEN", required=True, prefer_backend=False),
         telegram_allowed_user_ids=telegram_allowed_user_ids,
@@ -143,12 +168,16 @@ def load_settings() -> Settings:
         grok_api_key=pick("GROK_API_KEY"),
         runway_api_key=pick("RUNWAYML_API_SECRET", "RUNWAY_API_KEY"),
         ideogram_api_key=pick("IDEOGRAM_API_KEY"),
-        claude_model=pick("CLAUDE_MODEL", default="claude-3-5-haiku-latest"),
+        # Дефолты как в keepai_backend/config/settings.py (сайт).
+        claude_model=pick("CLAUDE_MODEL", default="claude-sonnet-4-5"),
         gemini_model=pick(
             "GEMINI_MODEL",
-            default="gemini-2.5-flash-lite",
+            default="gemini-3-flash-preview",
         ),
         perplexity_model=pick("PERPLEXITY_MODEL", default="sonar"),
-        grok_model=pick("GROK_MODEL", default="grok-2-latest"),
+        grok_model=pick("GROK_MODEL", default="grok-beta"),
+        gpt_model=pick("GPT_MODEL", default="gpt-4o"),
+        health_models_from_db=health_models_from_db,
+        db_dsn=db_dsn,
     )
 

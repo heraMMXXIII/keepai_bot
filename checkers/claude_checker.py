@@ -23,15 +23,15 @@ def _claude_error_snippet(body: str, limit: int = 400) -> str:
 
 
 async def check_claude_health(
-    api_key: str, model: str = "claude-3-5-haiku-latest"
+    api_key: str, model: str = "claude-sonnet-4-5"
 ) -> HealthResult:
     """Мини-запрос к Messages API (как OpenAI: реальный вывод, не только список моделей)."""
     if not api_key:
         return HealthResult(service="Claude", ok=False, error="API key is missing")
 
     key = api_key.strip()
-    primary = (model or "claude-3-5-haiku-latest").strip()
-    fallbacks = ("claude-3-5-haiku-20241022", "claude-3-5-haiku-latest")
+    primary = (model or "claude-sonnet-4-5").strip()
+    fallbacks = ("claude-haiku-4-5", "claude-3-5-haiku-latest")
     models_to_try = []
     for m in (primary,) + fallbacks:
         if m and m not in models_to_try:
@@ -53,7 +53,9 @@ async def check_claude_health(
                 }
                 response = await client.post(MESSAGES_URL, headers=headers, json=payload)
                 if response.status_code == 200:
-                    return HealthResult(service="Claude", ok=True)
+                    return HealthResult(
+                        service="Claude", ok=True, model_used=m
+                    )
                 body = response.text or ""
                 if response.status_code == 404 and i < len(models_to_try) - 1:
                     low = body.lower()
@@ -64,6 +66,12 @@ async def check_claude_health(
                     service="Claude",
                     ok=False,
                     error=f"HTTP {response.status_code}: {detail}",
+                    model_used=m,
                 )
     except Exception as error:
-        return HealthResult(service="Claude", ok=False, error=str(error))
+        return HealthResult(
+            service="Claude",
+            ok=False,
+            error=str(error),
+            model_used=models_to_try[0] if models_to_try else None,
+        )

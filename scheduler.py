@@ -22,6 +22,7 @@ from checkers import (
 )
 from checkers.base import BalanceResult, HealthResult
 from config import Settings
+from health_models_db import resolve_health_models
 from messages import format_balance_report, format_daily_report, format_health_alert_report
 from storage import TopupStorage
 
@@ -44,8 +45,9 @@ async def collect_balances(settings: Settings) -> OrderedDict[str, BalanceResult
 
 
 async def collect_health(settings: Settings) -> list[HealthResult]:
+    settings = await resolve_health_models(settings)
     openai, claude, gemini, perplexity, grok, ideogram = await asyncio.gather(
-        check_openai_health(settings.gpt_api_key),
+        check_openai_health(settings.gpt_api_key, settings.gpt_model),
         check_claude_health(settings.claude_api_key, settings.claude_model),
         check_gemini_health(settings.gemini_api_key, settings.gemini_model),
         check_perplexity_health(

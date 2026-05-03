@@ -103,6 +103,12 @@ def format_balance_report(
     return "\n".join(lines)
 
 
+def _health_model_note(result: HealthResult) -> str:
+    if result.model_used:
+        return f" · {result.model_used}"
+    return ""
+
+
 def format_daily_report(
     balances: Dict[str, BalanceResult],
     health_results: Iterable[HealthResult],
@@ -123,8 +129,9 @@ def format_daily_report(
     lines.append("✅ Работоспособность:")
     for service_key, result in zip(HEALTH_TOPUP_KEYS, health_results):
         line_date = _balance_date_in_parens(service_key, last_topup, today)
+        note = _health_model_note(result)
         if result.ok:
-            lines.append(f"{result.service} - работает ✅ ({line_date})")
+            lines.append(f"{result.service} - работает ✅{note} ({line_date})")
         else:
             detail = ""
             if result.error:
@@ -132,7 +139,9 @@ def format_daily_report(
                 if len(err) > 500:
                     err = err[:497] + "…"
                 detail = f"\n   └ {err}"
-            lines.append(f"{result.service} - не работает 🔴 ({line_date}){detail}")
+            lines.append(
+                f"{result.service} - не работает 🔴{note} ({line_date}){detail}"
+            )
     return "\n".join(lines)
 
 
@@ -150,6 +159,7 @@ def format_health_alert_report(health_results: Iterable[HealthResult]) -> str | 
             if len(err) > 500:
                 err = err[:497] + "…"
             detail = f"\n   └ {err}"
-        lines.append(f"{result.service} - не работает 🔴{detail}")
+        note = _health_model_note(result)
+        lines.append(f"{result.service} - не работает 🔴{note}{detail}")
     return "\n".join(lines)
 

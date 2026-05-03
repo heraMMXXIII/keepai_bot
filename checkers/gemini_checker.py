@@ -60,7 +60,9 @@ async def check_gemini_health(
                     json=minimal_body,
                 )
                 if gen_resp.status_code == 200:
-                    return HealthResult(service="Gemini", ok=True)
+                    return HealthResult(
+                        service="Gemini", ok=True, model_used=m
+                    )
                 body = gen_resp.text or ""
                 if gen_resp.status_code in (400, 404) and i < len(models_to_try) - 1:
                     low = body.lower()
@@ -71,6 +73,12 @@ async def check_gemini_health(
                     service="Gemini",
                     ok=False,
                     error=f"HTTP {gen_resp.status_code}: {detail}",
+                    model_used=m,
                 )
     except Exception as error:
-        return HealthResult(service="Gemini", ok=False, error=str(error))
+        return HealthResult(
+            service="Gemini",
+            ok=False,
+            error=str(error),
+            model_used=models_to_try[0] if models_to_try else None,
+        )

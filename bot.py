@@ -172,6 +172,14 @@ async def ask_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
     data = query.data or ""
     service = data.replace(CB_SET_DATE_PREFIX, "", 1)
+    if service not in TOPUP_SERVICES:
+        uid = update.effective_user.id if update.effective_user else "?"
+        log.info("Отклонён callback set_date с неизвестным сервисом %r (user %s)", service, uid)
+        await query.edit_message_text(
+            "Действие недопустимо или устарело. Нажми /start.",
+            reply_markup=_main_menu(),
+        )
+        return ConversationHandler.END
     _log_user_action(update, f"выбрана нейросеть для даты пополнения: {_service_label(service)}")
     context.user_data["editing_service"] = service
     await query.edit_message_text(
@@ -186,6 +194,14 @@ async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if not service:
         _log_user_action(update, "ввод даты без выбранного сервиса")
         await update.message.reply_text("Сервис не выбран. Нажми /start.")
+        return ConversationHandler.END
+    if service not in TOPUP_SERVICES:
+        context.user_data.pop("editing_service", None)
+        _log_user_action(update, f"ввод даты: неизвестный сервис в сессии {service!r}")
+        await update.effective_message.reply_text(
+            "Сессия сброшена. Нажми /start.",
+            reply_markup=_main_menu(),
+        )
         return ConversationHandler.END
 
     raw_date = update.effective_message.text
@@ -202,7 +218,16 @@ async def save_new_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return STATE_WAITING_DATE
 
     storage: TopupStorage = context.application.bot_data["storage"]
-    storage.set_date(service, normalized_date)
+    try:
+        storage.set_date(service, normalized_date)
+    except ValueError:
+        context.user_data.pop("editing_service", None)
+        _log_user_action(update, f"отклонено сохранение даты: неизвестный сервис {service!r}")
+        await update.effective_message.reply_text(
+            "Сервис не распознан. Нажми /start и выбери строку из меню.",
+            reply_markup=_main_menu(),
+        )
+        return ConversationHandler.END
     context.user_data.pop("editing_service", None)
     _log_user_action(
         update,

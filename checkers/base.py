@@ -18,4 +18,6 @@ class HealthResult:
     service: str
     ok: bool
     error: Optional[str] = None
+    # Временно: какая модель реально дергалась в проверке (для отладки в отчётах).
+    model_used: Optional[str] = None
 
