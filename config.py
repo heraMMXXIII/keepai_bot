@@ -176,7 +176,7 @@ def load_settings() -> Settings:
         ),
         perplexity_model=pick("PERPLEXITY_MODEL", default="sonar"),
         grok_model=pick("GROK_MODEL", default="grok-beta"),
-        gpt_model=pick("GPT_MODEL", default="gpt-4o"),
+        gpt_model=pick("GPT_MODEL", default="gpt-5.5"),
         health_models_from_db=health_models_from_db,
         db_dsn=db_dsn,
     )

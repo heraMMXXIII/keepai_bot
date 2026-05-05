@@ -21,7 +21,7 @@ TABLE = "core_aimodelcost"
 MODEL_COST_KEYS: dict[str, tuple[str, ...]] = {
     "claude": ("haiku", "sonnet", "opus"),
     "gemini": ("flash", "pro", "flash-exp"),
-    "gpt": ("gpt-5.2", "gpt-5-mini", "gpt-5-nano"),
+    "gpt": ("gpt-5.5", "gpt-5-mini", "gpt-5-nano"),
     "perplexity": ("sonar", "sonar-pro"),
     "grok": ("grok-4-1-fast-reasoning", "grok-3"),
 }
@@ -65,7 +65,8 @@ def _normalize_for_db(ai_model: str, key: str) -> str | None:
         "grok-imagine-image": "grok-imagine-image",
     }
     gpt_mapping = {
-        "gpt-5.2": "gpt-5.2",
+        "gpt-5.5": "gpt-5.5",
+        "gpt-5.2": "gpt-5.5",
         "gpt-5-mini": "gpt-5-mini",
         "gpt-5-nano": "gpt-5-nano",
     }

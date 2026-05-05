@@ -1,10 +1,13 @@
 import json
 
 import httpx
+import asyncio
 
 from .base import HealthResult
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_HIGH_DEMAND_RETRIES = 3
+GEMINI_HIGH_DEMAND_RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
 
 
 def _gemini_error_snippet(text: str, limit: int = 400) -> str:
@@ -53,28 +56,53 @@ async def check_gemini_health(
         async with httpx.AsyncClient(timeout=45) as client:
             for i, m in enumerate(models_to_try):
                 gen_url = f"{API_BASE}/models/{m}:generateContent"
-                gen_resp = await client.post(
-                    gen_url,
-                    params=key_param,
-                    headers=headers_json,
-                    json=minimal_body,
-                )
-                if gen_resp.status_code == 200:
-                    return HealthResult(
-                        service="Gemini", ok=True, model_used=m
+                last_high_demand_detail = ""
+                for attempt in range(GEMINI_HIGH_DEMAND_RETRIES + 1):
+                    gen_resp = await client.post(
+                        gen_url,
+                        params=key_param,
+                        headers=headers_json,
+                        json=minimal_body,
                     )
-                body = gen_resp.text or ""
-                if gen_resp.status_code in (400, 404) and i < len(models_to_try) - 1:
+                    if gen_resp.status_code == 200:
+                        return HealthResult(
+                            service="Gemini", ok=True, model_used=m
+                        )
+                    body = gen_resp.text or ""
                     low = body.lower()
-                    if "model" in low or "not found" in low or "not_found" in low:
-                        continue
-                detail = _gemini_error_snippet(body[:2000])
-                return HealthResult(
-                    service="Gemini",
-                    ok=False,
-                    error=f"HTTP {gen_resp.status_code}: {detail}",
-                    model_used=m,
-                )
+                    is_high_demand_503 = gen_resp.status_code == 503 and (
+                        "high demand" in low
+                        or "spikes in demand are usually temporary" in low
+                        or "try again later" in low
+                    )
+                    if is_high_demand_503:
+                        detail = _gemini_error_snippet(body[:2000])
+                        last_high_demand_detail = detail
+                        if attempt < GEMINI_HIGH_DEMAND_RETRIES:
+                            delay = GEMINI_HIGH_DEMAND_RETRY_DELAYS_SEC[
+                                min(attempt, len(GEMINI_HIGH_DEMAND_RETRY_DELAYS_SEC) - 1)
+                            ]
+                            await asyncio.sleep(delay)
+                            continue
+                        break
+                    if gen_resp.status_code in (400, 404) and i < len(models_to_try) - 1:
+                        if "model" in low or "not found" in low or "not_found" in low:
+                            break
+                    detail = _gemini_error_snippet(body[:2000])
+                    return HealthResult(
+                        service="Gemini",
+                        ok=False,
+                        error=f"HTTP {gen_resp.status_code}: {detail}",
+                        model_used=m,
+                    )
+                if last_high_demand_detail:
+                    return HealthResult(
+                        service="Gemini",
+                        ok=False,
+                        error=f"HTTP 503: временная перегрузка у провайдера (high demand), попробуйте позже. Детали: {last_high_demand_detail}",
+                        model_used=m,
+                        temporary_issue=True,
+                    )
     except Exception as error:
         return HealthResult(
             service="Gemini",

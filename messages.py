@@ -132,6 +132,16 @@ def format_daily_report(
         note = _health_model_note(result)
         if result.ok:
             lines.append(f"{result.service} - работает ✅{note} ({line_date})")
+        elif result.temporary_issue:
+            detail = ""
+            if result.error:
+                err = result.error.strip().replace("\n", " ")
+                if len(err) > 500:
+                    err = err[:497] + "…"
+                detail = f"\n   └ {err}"
+            lines.append(
+                f"{result.service} - временная перегрузка 🟡{note} ({line_date}){detail}"
+            )
         else:
             detail = ""
             if result.error:
@@ -147,7 +157,11 @@ def format_daily_report(
 
 def format_health_alert_report(health_results: Iterable[HealthResult]) -> str | None:
     today = current_date_ru()
-    failed = [result for result in health_results if not result.ok]
+    failed = [
+        result
+        for result in health_results
+        if (not result.ok) and (not result.temporary_issue)
+    ]
     if not failed:
         return None
 

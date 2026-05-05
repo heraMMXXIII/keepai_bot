@@ -72,7 +72,7 @@ def _error_for_telegram(body: str) -> str:
     return _redact_sk_in_text(body[:400])
 
 
-async def check_openai_health(api_key: str, model: str = "gpt-4o") -> HealthResult:
+async def check_openai_health(api_key: str, model: str = "gpt-5.5") -> HealthResult:
     """Реальный мини-запрос к Chat Completions: ловит исчерпанный баланс/квоту.
 
     Раньше был только GET /v1/models — при нулевом балансе он часто остаётся 200,
@@ -86,7 +86,7 @@ async def check_openai_health(api_key: str, model: str = "gpt-4o") -> HealthResu
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
     }
-    primary = (model or "gpt-4o").strip()
+    primary = (model or "gpt-5.5").strip()
     fallbacks = ("gpt-4o-mini", "gpt-3.5-turbo")
     models_to_try: list[str] = []
     for m in (primary,) + fallbacks:

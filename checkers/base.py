@@ -20,4 +20,6 @@ class HealthResult:
     error: Optional[str] = None
     # Временно: какая модель реально дергалась в проверке (для отладки в отчётах).
     model_used: Optional[str] = None
+    # Временная деградация (например, 503 high demand), не трактуется как "сервис кончился".
+    temporary_issue: bool = False
 
