@@ -18,6 +18,7 @@ class Settings:
     balance_interval_minutes: int
     balance_alert_usd: float
     balance_alert_tokens: int
+    balance_alert_chars: int
     gpt_api_key: str
     eleven_labs_api_key: str
     suno_api_key: str
@@ -159,6 +160,7 @@ def load_settings() -> Settings:
         ),
         balance_alert_usd=float(pick("BALANCE_ALERT_USD", default="5.0", prefer_backend=False)),
         balance_alert_tokens=int(pick("BALANCE_ALERT_TOKENS", default="1000", prefer_backend=False)),
+        balance_alert_chars=int(pick("BALANCE_ALERT_CHARS", default="1000", prefer_backend=False)),
         gpt_api_key=pick("ChatGPT_API_KEY", "GPT_API_KEY", "OPENAI_API_KEY"),
         eleven_labs_api_key=pick("ELEVEN_LABS_API_KEY"),
         suno_api_key=pick("SUNO_API_KEY"),

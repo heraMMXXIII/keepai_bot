@@ -53,13 +53,18 @@ def _balance_detail_block(result: BalanceResult) -> str:
 
 
 def _balance_needs_alert(
-    result: BalanceResult, alert_usd: float, alert_tokens: int
+    result: BalanceResult,
+    alert_usd: float,
+    alert_tokens: int,
+    alert_chars: int,
 ) -> bool:
     if not result.ok or result.value is None:
         return False
     if result.unit == "usd" and result.value < alert_usd:
         return True
     if result.unit == "tokens" and result.value < alert_tokens:
+        return True
+    if result.unit == "chars" and result.value < alert_chars:
         return True
     if result.unit == "credits":
         credits_threshold = alert_usd / 0.01
@@ -75,13 +80,14 @@ def _balance_line(
     today: str,
     alert_usd: float,
     alert_tokens: int,
+    alert_chars: int,
 ) -> str:
     line_date = _balance_date_in_parens(service_key, last_topup, today)
     core = (
         f"{result.service} - {format_balance_value(result)} ({line_date})"
         f"{_balance_detail_block(result)}"
     )
-    if _balance_needs_alert(result, alert_usd, alert_tokens):
+    if _balance_needs_alert(result, alert_usd, alert_tokens, alert_chars):
         return f"⚠️ ВНИМАНИЕ {core}"
     return core
 
@@ -91,13 +97,14 @@ def format_balance_report(
     last_topup: Dict[str, Optional[str]],
     alert_usd: float,
     alert_tokens: int,
+    alert_chars: int,
 ) -> str:
     today = current_date_ru()
     lines = [f"🔋 Баланс нейросетей ({today})", ""]
     for service_key, result in results.items():
         lines.append(
             _balance_line(
-                result, service_key, last_topup, today, alert_usd, alert_tokens
+                result, service_key, last_topup, today, alert_usd, alert_tokens, alert_chars
             )
         )
     return "\n".join(lines)
@@ -115,13 +122,14 @@ def format_daily_report(
     last_topup: Dict[str, Optional[str]],
     alert_usd: float,
     alert_tokens: int,
+    alert_chars: int,
 ) -> str:
     today = current_date_ru()
     lines = [f"📊 Статус нейросетей ({today})", "", "💰 Балансы:"]
     for service_key, result in balances.items():
         lines.append(
             _balance_line(
-                result, service_key, last_topup, today, alert_usd, alert_tokens
+                result, service_key, last_topup, today, alert_usd, alert_tokens, alert_chars
             )
         )
 
