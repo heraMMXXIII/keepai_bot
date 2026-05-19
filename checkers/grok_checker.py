@@ -50,8 +50,9 @@ async def check_grok_health(api_key: str, model: str = "grok-beta") -> HealthRes
 
     primary = (model or "grok-beta").strip()
     fallbacks = (
-        "grok-4-1-fast-reasoning",
-        "grok-3",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
         "grok-beta",
         "grok-2-1212",
     )

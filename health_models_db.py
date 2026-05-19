@@ -20,10 +20,10 @@ TABLE = "core_aimodelcost"
 # Как на фронте (stars.MODEL_COST_KEYS): первая доступная активная запись в этом порядке.
 MODEL_COST_KEYS: dict[str, tuple[str, ...]] = {
     "claude": ("haiku", "sonnet", "opus"),
-    "gemini": ("flash", "pro", "flash-exp"),
-    "gpt": ("gpt-5.5", "gpt-5-mini", "gpt-5-nano"),
+    "gemini": ("flash", "pro"),
+    "gpt": ("gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"),
     "perplexity": ("sonar", "sonar-pro"),
-    "grok": ("grok-4-1-fast-reasoning", "grok-3"),
+    "grok": ("grok-4.3", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"),
 }
 
 TEXT_HEALTH_EXCLUDED = frozenset(
@@ -37,38 +37,80 @@ TEXT_HEALTH_EXCLUDED = frozenset(
     }
 )
 
+# Сняты с Perplexity API — health-check не должен брать из БД как primary.
+PERPLEXITY_DEPRECATED = frozenset(
+    {
+        "llama-3.1-sonar-small-128k-online",
+        "llama-3.1-sonar-large-128k-online",
+        "llama-3.1-sonar-huge-128k-online",
+        "sonar-online",
+        "sonar-reasoning",
+        "sonar-small",
+        "sonar-medium",
+        "sonar-large",
+    }
+)
+
 
 def _normalize_for_db(ai_model: str, key: str) -> str | None:
     """Возвращает model_name для поиска в БД (как нормализация во views/models)."""
     claude_mapping = {
-        "claude-haiku-4-5-20251001": "claude-haiku-4-5",
-        "claude-sonnet-4-5-20250929": "claude-sonnet-4-5",
-        "claude-opus-4-1-20250805": "claude-opus-4-1",
-        "claude-opus-4-5-20251101": "claude-opus-4-1",
-        "haiku": "claude-haiku-4-5",
-        "sonnet": "claude-sonnet-4-5",
-        "opus": "claude-opus-4-6",
+        "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-5": "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929": "claude-sonnet-4-6",
+        "claude-sonnet-4-6": "claude-sonnet-4-6",
+        "claude-opus-4-1": "claude-opus-4-7",
+        "claude-opus-4-1-20250805": "claude-opus-4-7",
+        "claude-opus-4-5-20251101": "claude-opus-4-7",
+        "claude-opus-4-6": "claude-opus-4-7",
+        "claude-opus-4-7": "claude-opus-4-7",
+        "haiku": "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus": "claude-opus-4-7",
     }
     gemini_mapping = {
-        "gemini-2.0-flash-exp": "gemini-2.0-flash-exp",
-        "flash-exp": "gemini-2.0-flash-exp",
-        "flash": "gemini-1.5-flash",
-        "pro": "gemini-1.5-pro",
+        "gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
+        "flash": "gemini-3-flash-preview",
+        "pro": "gemini-3.1-pro-preview",
+        # legacy aliases
+        "gemini-2.0-flash-exp": "gemini-3.1-flash-lite",
+        "flash-exp": "gemini-3.1-flash-lite",
+        "gemini-3-flash": "gemini-3-flash-preview",
+        "gemini-3-flash-preview": "gemini-3-flash-preview",
+        "gemini-3-pro": "gemini-3.1-pro-preview",
+        "gemini-3-pro-preview": "gemini-3.1-pro-preview",
     }
     perplexity_mapping = {
         "sonar": "sonar",
         "sonar-pro": "sonar-pro",
+        # legacy (сняты с API)
+        "llama-3.1-sonar-small-128k-online": "sonar",
+        "llama-3.1-sonar-large-128k-online": "sonar",
+        "llama-3.1-sonar-huge-128k-online": "sonar",
+        "sonar-online": "sonar",
+        "sonar-reasoning": "sonar",
+        "sonar-small": "sonar",
+        "sonar-medium": "sonar",
+        "sonar-large": "sonar",
     }
     grok_mapping = {
-        "grok-4-1-fast-reasoning": "grok-4-1-fast-reasoning",
-        "grok-3": "grok-3",
+        "grok-4.3": "grok-4.3",
+        "grok-4.20-0309-reasoning": "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning": "grok-4.20-0309-non-reasoning",
+        # legacy aliases
+        "grok-4-1-fast-reasoning": "grok-4.20-0309-reasoning",
+        "grok-3": "grok-4.3",
         "grok-imagine-image": "grok-imagine-image",
     }
     gpt_mapping = {
         "gpt-5.5": "gpt-5.5",
         "gpt-5.2": "gpt-5.5",
-        "gpt-5-mini": "gpt-5-mini",
-        "gpt-5-nano": "gpt-5-nano",
+        "gpt-5-mini": "gpt-5.4-mini",
+        "gpt-5-nano": "gpt-5.4-nano",
+        "gpt-5.4-mini": "gpt-5.4-mini",
+        "gpt-5.4-nano": "gpt-5.4-nano",
     }
     if ai_model == "claude":
         return claude_mapping.get(key, key)
@@ -92,6 +134,8 @@ def _text_model_ok(ai_model: str, model_name: str) -> bool:
     if mn.endswith("-reference"):
         return False
     if ai_model == "grok" and mn in ("grok-imagine-image", "grok-2-image-1212"):
+        return False
+    if ai_model == "perplexity" and (mn in PERPLEXITY_DEPRECATED or mn.startswith("llama-")):
         return False
     if ai_model == "gpt" and (mn.startswith("dall-e") or "gpt-image" in mn):
         return False
